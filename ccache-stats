@@ -1,0 +1,105 @@
+#!/usr/bin/env ruby
+
+@cache_dir = '/var/cache/ccache'
+
+def typeify(value)
+  case value
+  when /\A\d+\z/
+    value.to_i
+  when /\A\d+\.\d+\z/
+    value.to_f
+  else
+    :string
+  end
+end
+
+def stats
+  time = Time.new
+  ([
+    { 'Date' => time.strftime('%Y-%m-%d') },
+    { 'Time' => time.strftime('%H:%M:%S') },
+  ] +
+  `ccache -s -o cache_dir=#{@cache_dir}`.lines.grep(/hit|miss/).map do |line|
+    line =~ /(.*)\s+([0-9.]+)( %)?/
+    { $1.strip => typeify($2) }
+  end).inject(&:merge)
+end
+
+def format_difference_i(difference)
+  difference.to_s
+end
+
+def format_difference_f(difference)
+  format('%.02f %%', difference)
+end
+
+def format_difference(difference)
+  if difference.is_a?(Integer)
+    format_difference_i(difference)
+  elsif difference.is_a?(Float)
+    format_difference_f(difference)
+  else
+    ''
+  end
+end
+
+def stats_diff(initial_stats, current_stats)
+  res = {}
+
+  initial_stats.each do |key, initial_value|
+    next unless key =~ /hit|miss/
+    res[key] = current_stats[key] - initial_value
+  end
+
+  res
+end
+
+def print_stats(initial_stats, current_stats, delta)
+  puts format('%-30s %12s %12s %12s', '', 'initial  ', 'current  ', 'this run')
+  initial_stats.each do |key, initial_value|
+    current_value = current_stats[key]
+
+    delta_s = delta[key] ? format_difference(delta[key]) : ''
+
+    if current_value.is_a?(Float)
+      puts format('%-30s %10s %% %10s %% %12.2f %%', key, initial_value, current_value, efficiency(delta) * 100)
+    else
+      puts format('%-30s %10s   %10s   %12s', key, initial_value, current_value, delta_s)
+    end
+  end
+end
+
+def wait
+  if ARGV.empty?
+    puts
+    loop do
+      print '[r]efresh, [q]uit: '
+      case gets
+      when "r\n", "\n"
+        return true
+      when nil, "q\n"
+        exit
+      end
+    end
+  else
+    sleep ARGV.first.to_i
+  end
+
+  true
+end
+
+def efficiency(stats)
+  i_stats = stats.select { |k, v| k =~ /hit|miss/ && v.is_a?(Integer) }
+
+  i_stats.select { |k, _v| k =~ /hit/ }.values.inject(:+).to_f / i_stats.values.inject(:+).to_f
+end
+
+initial_stats = stats
+
+loop do
+  current_stats = stats
+  print "\e[H\e[2J"
+  delta = stats_diff(initial_stats, current_stats)
+  print_stats(initial_stats, current_stats, delta)
+  wait
+end
